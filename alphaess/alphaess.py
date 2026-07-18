@@ -10,6 +10,28 @@ logger = logging.getLogger(__name__)
 
 BASEURL = "https://openapi.alphaess.com/api"
 
+RETURN_CODES = {
+    6001: "Parameter error",
+    6002: "The SN is not bound to the user",
+    6003: "You have bound this SN",
+    6004: "CheckCode error",
+    6005: "This appId is not bound to the SN",
+    6006: "Timestamp error",
+    6007: "Sign verification error",
+    6008: "Set failed",
+    6009: "Whitelist verification failed",
+    6010: "Sign is empty",
+    6011: "timestamp is empty",
+    6012: "AppId is empty",
+    6016: "Data does not exist or has been deleted",
+    6026: "internal error",
+    6029: "operation failed",
+    6038: "system sn does not exist",
+    6042: "system offline",
+    6046: "Verification code error",
+    6053: "The request was too fast, please try again later",
+}
+
 
 class alphaess:
     """Class for Alpha ESS."""
@@ -310,6 +332,44 @@ class alphaess:
         except Exception as e:
             logger.error(f"Error: {e} when calling {resource}")
 
+    async def getTimeChargeBySn(self, sysSn) -> Optional(dict):
+        """According SN to get periodic charge/discharge settings"""
+        try:
+            resource = f"{BASEURL}/getTimeChargeBySn?sysSn={sysSn}"
+
+            logger.debug(f"Trying to call {resource}")
+
+            return await self.api_get(resource)
+
+        except Exception as e:
+            logger.error(f"Error: {e} when calling {resource}")
+
+    async def setTimeChargeBySn(self, sysSn, executeCycleType, chargeTimeList, dischargeTimeList,
+                                gridChargeCycle=None, ctrDisCycle=None) -> Optional(dict):
+        """According SN to set periodic charge/discharge settings"""
+        try:
+            resource = f"{BASEURL}/setTimeChargeBySn"
+
+            settings = {
+                "sysSn": sysSn,
+                "executeCycleType": executeCycleType,
+                "chargeTimeList": chargeTimeList,
+                "dischargeTimeList": dischargeTimeList
+            }
+
+            if gridChargeCycle is not None:
+                settings["gridChargeCycle"] = gridChargeCycle
+
+            if ctrDisCycle is not None:
+                settings["ctrDisCycle"] = ctrDisCycle
+
+            logger.debug(f"Trying to call {resource} with settings {settings}")
+
+            return await self.api_post(resource, settings)
+
+        except Exception as e:
+            logger.error(f"Error: {e} when calling {resource}")
+
     async def getIPData(self) -> Optional(dict):
         ENDPOINTS = {
             "status": "/config?command=status",
@@ -335,6 +395,21 @@ class alphaess:
             print(f"Failed to fetch {name} from {url}: {e}")
             return name, None
 
+    @staticmethod
+    def __is_success(json_response) -> bool:
+        """Check whether a json response indicates success (some endpoints return 'info' instead of 'msg')"""
+        return (
+            json_response.get("code") == 200
+            or json_response.get("msg") == "Success"
+            or json_response.get("info") == "Success"
+        )
+
+    @staticmethod
+    def __return_code_description(json_response) -> str:
+        """Return a formatted RETURN_CODES description for the response code, if known"""
+        description = RETURN_CODES.get(json_response.get("code"))
+        return f" ({description})" if description else ""
+
     async def api_get(self, path, json=None) -> Optional(list):
         """Retrieve ESS list by serial number from Alpha ESS"""
         if json is None:
@@ -355,8 +430,9 @@ class alphaess:
                 else:
                     logger.error(f"Unexpected response received: {response.status} when calling {path}")
 
-                if ("msg" in json_response and json_response["msg"] != "Success") or ("msg" not in json_response):
-                    logger.error(f"Unexpected json_response : {json_response} when calling {path}")
+                if not self.__is_success(json_response):
+                    logger.error(
+                        f"Unexpected json_response : {json_response}{self.__return_code_description(json_response)} when calling {path}")
                     return None
                 else:
                     if json_response["data"] is not None:
@@ -389,12 +465,15 @@ class alphaess:
             else:
                 logger.error(f"Unexpected response received: {response.status} when calling {path}")
 
-            if "msg" in json_response and json_response["msg"] == "Success":
+            if self.__is_success(json_response):
                 if json_response["data"] is None:
                     return json_response["data"]
                 else:
                     logger.error(f"Unexpected json_response : {json_response} when calling {path}")
                     return json_response["data"]
+            else:
+                logger.error(
+                    f"Unexpected json_response : {json_response}{self.__return_code_description(json_response)} when calling {path}")
 
         except Exception as e:
             logger.error(e)
